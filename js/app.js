@@ -1,13 +1,19 @@
-import { compareCells, detectDelimiter, encodeCSV, normalizeTable, parseCSV } from './csv.js';
+import { compareCells, detectDelimiter, encodeCSV, filterRows, inferColumnType, normalizeTable, parseCSV } from './csv.js';
 
 const $ = (selector) => document.querySelector(selector);
 const el = Object.fromEntries([
-  'welcome', 'workspace', 'dropzone', 'file-input', 'open-button', 'export-button', 'theme-button', 'sample-button', 'filename', 'file-meta', 'row-count', 'column-count', 'delimiter-label', 'visible-count', 'search-input', 'delimiter-select', 'columns-button', 'columns-panel', 'columns-list', 'all-columns', 'page-size', 'table-head', 'table-body', 'empty-state', 'range-label', 'page-label', 'prev-page', 'next-page', 'close-button', 'toast',
+  'welcome', 'workspace', 'dropzone', 'file-input', 'open-button', 'export-button', 'theme-button', 'sample-button', 'filename', 'file-meta', 'row-count', 'column-count', 'delimiter-label', 'visible-count', 'search-input', 'delimiter-select', 'columns-button', 'columns-panel', 'columns-list', 'all-columns', 'page-size', 'table-head', 'table-body', 'empty-state', 'range-label', 'page-label', 'prev-page', 'next-page', 'close-button', 'toast', 'filter-button', 'filter-count', 'filter-panel', 'filter-column', 'filter-operator', 'filter-value-wrap', 'filter-value', 'filter-value2-wrap', 'filter-value2', 'add-filter', 'clear-filters', 'filter-chips',
 ].map((id) => [id.replaceAll('-', '_'), $(`#${id}`)]));
 
-const state = { rawText: '', filename: '', delimiter: ',', headers: [], rows: [], filtered: [], visible: new Set(), query: '', sort: null, direction: 1, page: 1, pageSize: 50 };
+const state = { rawText: '', filename: '', delimiter: ',', headers: [], rows: [], filtered: [], visible: new Set(), columnTypes: [], filters: [], query: '', sort: null, direction: 1, page: 1, pageSize: 50 };
 let toastTimer;
 const delimiterNames = { ',': 'Comma', '\t': 'Tab', ';': 'Semicolon', '|': 'Pipe' };
+const operators = {
+  text: [['contains', '포함'], ['not_contains', '포함하지 않음'], ['eq', '같음'], ['neq', '같지 않음'], ['starts', '시작 문자'], ['ends', '끝 문자'], ['empty', '비어 있음'], ['not_empty', '비어 있지 않음']],
+  number: [['eq', '='], ['neq', '≠'], ['gt', '>'], ['gte', '≥'], ['lt', '<'], ['lte', '≤'], ['between', '범위'], ['empty', '비어 있음'], ['not_empty', '비어 있지 않음']],
+  date: [['on', '해당 날짜'], ['before', '이전'], ['after', '이후'], ['between', '기간'], ['empty', '비어 있음'], ['not_empty', '비어 있지 않음']],
+};
+const operatorLabels = Object.fromEntries(Object.values(operators).flat());
 const sample = `Order ID,Date,Customer,Region,Product,Category,Quantity,Unit Price,Status
 BR-1048,2026-07-28,김하늘,서울,Wireless Keyboard,Accessories,2,59000,배송 완료
 BR-1049,2026-07-29,Alex Kim,부산,27-inch Monitor,Displays,1,329000,배송 중
@@ -35,13 +41,13 @@ function loadText(text, filename, encoding = 'UTF-8', forcedDelimiter) {
   state.rawText = text; state.filename = filename; state.delimiter = forcedDelimiter || detectDelimiter(text);
   const table = normalizeTable(parseCSV(text, state.delimiter));
   if (!table.headers.length) { showToast('표시할 데이터가 없습니다.'); return; }
-  state.headers = table.headers; state.rows = table.rows; state.visible = new Set(table.headers.map((_, i) => i));
-  state.query = ''; state.sort = null; state.direction = 1; state.page = 1;
+  state.headers = table.headers; state.rows = table.rows; state.visible = new Set(table.headers.map((_, i) => i)); state.columnTypes = table.headers.map((_, index) => inferColumnType(table.rows, index));
+  state.query = ''; state.filters = []; state.sort = null; state.direction = 1; state.page = 1;
   el.search_input.value = ''; el.filename.textContent = filename;
   el.file_meta.textContent = `${encoding} · ${new Blob([text]).size.toLocaleString()} bytes · 브라우저에서만 처리됨`;
   el.delimiter_select.value = state.delimiter === '\t' ? 'tab' : state.delimiter;
   el.welcome.hidden = true; el.workspace.hidden = false; el.export_button.disabled = false;
-  buildColumnPanel(); applyView();
+  buildColumnPanel(); buildFilterBuilder(); renderFilterChips(); applyView();
 }
 
 async function loadFile(file) {
@@ -61,9 +67,59 @@ function buildColumnPanel() {
   }));
 }
 
+function buildFilterBuilder() {
+  const typeLabels = { text: '텍스트', number: '숫자', date: '날짜' };
+  el.filter_column.replaceChildren(...state.headers.map((header, index) => {
+    const option = document.createElement('option'); option.value = String(index); option.textContent = `${header} · ${typeLabels[state.columnTypes[index]]}`; return option;
+  }));
+  updateFilterOperators();
+}
+
+function updateFilterOperators() {
+  const column = Number(el.filter_column.value || 0); const type = state.columnTypes[column] || 'text';
+  el.filter_operator.replaceChildren(...operators[type].map(([value, label]) => {
+    const option = document.createElement('option'); option.value = value; option.textContent = label; return option;
+  }));
+  el.filter_value.type = type === 'date' ? 'date' : type === 'number' ? 'number' : 'text';
+  el.filter_value2.type = el.filter_value.type; updateFilterValueFields();
+}
+
+function updateFilterValueFields() {
+  const operator = el.filter_operator.value; const noValue = operator === 'empty' || operator === 'not_empty'; const between = operator === 'between';
+  el.filter_value_wrap.hidden = noValue; el.filter_value2_wrap.hidden = !between;
+  el.filter_value_wrap.firstChild.textContent = between ? (state.columnTypes[Number(el.filter_column.value)] === 'date' ? '시작일' : '최솟값') : '값';
+}
+
+function addFilter() {
+  const column = Number(el.filter_column.value); const operator = el.filter_operator.value; const noValue = operator === 'empty' || operator === 'not_empty';
+  const value = el.filter_value.value.trim(); const value2 = el.filter_value2.value.trim();
+  if (!noValue && !value) { showToast('필터 값을 입력해 주세요.'); el.filter_value.focus(); return; }
+  if (operator === 'between' && !value2) { showToast('범위의 끝 값을 입력해 주세요.'); el.filter_value2.focus(); return; }
+  state.filters.push({ id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`, column, type: state.columnTypes[column], operator, value, value2 });
+  el.filter_value.value = ''; el.filter_value2.value = ''; state.page = 1; renderFilterChips(); applyView();
+}
+
+function removeFilter(id) { state.filters = state.filters.filter((filter) => filter.id !== id); state.page = 1; renderFilterChips(); applyView(); }
+
+function renderFilterChips() {
+  el.filter_chips.replaceChildren(...state.filters.map((filter) => {
+    const chip = document.createElement('span'); chip.className = 'filter-chip';
+    const column = document.createElement('b'); column.textContent = state.headers[filter.column];
+    const description = document.createElement('span');
+    const values = filter.operator === 'between' ? `${filter.value} – ${filter.value2}` : (filter.operator === 'empty' || filter.operator === 'not_empty' ? '' : filter.value);
+    description.textContent = `${operatorLabels[filter.operator]}${values ? ` ${values}` : ''}`;
+    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', `${state.headers[filter.column]} 필터 제거`); remove.addEventListener('click', () => removeFilter(filter.id));
+    chip.append(column, description, remove); return chip;
+  }));
+  el.filter_count.textContent = String(state.filters.length); el.filter_count.hidden = state.filters.length === 0;
+  el.clear_filters.disabled = state.filters.length === 0;
+}
+
 function applyView() {
   const needle = state.query.toLocaleLowerCase();
-  state.filtered = state.rows.map((row, originalIndex) => ({ row, originalIndex })).filter(({ row }) => !needle || row.some((cell) => cell.toLocaleLowerCase().includes(needle)));
+  const matchingRows = filterRows(state.rows, state.filters);
+  const allowed = new Set(matchingRows);
+  state.filtered = state.rows.map((row, originalIndex) => ({ row, originalIndex })).filter(({ row }) => allowed.has(row) && (!needle || row.some((cell) => cell.toLocaleLowerCase().includes(needle))));
   if (state.sort !== null) {
     state.filtered.sort((a, b) => (compareCells(a.row[state.sort], b.row[state.sort]) || a.originalIndex - b.originalIndex) * state.direction);
   }
@@ -92,7 +148,7 @@ function render() {
 }
 
 function sortBy(index) { if (state.sort === index) state.direction *= -1; else { state.sort = index; state.direction = 1; } state.page = 1; applyView(); }
-function closeFile() { state.rawText = ''; el.workspace.hidden = true; el.welcome.hidden = false; el.export_button.disabled = true; el.file_input.value = ''; }
+function closeFile() { state.rawText = ''; state.filters = []; el.workspace.hidden = true; el.welcome.hidden = false; el.export_button.disabled = true; el.file_input.value = ''; }
 function exportResults() {
   const indexes = [...state.visible]; const headers = indexes.map((i) => state.headers[i]); const rows = state.filtered.map(({ row }) => indexes.map((i) => row[i]));
   const blob = new Blob(['\uFEFF', encodeCSV(headers, rows)], { type: 'text/csv;charset=utf-8' }); const url = URL.createObjectURL(blob); const link = document.createElement('a');
@@ -112,7 +168,11 @@ el.page_size.addEventListener('change', () => { state.pageSize = Number(el.page_
 el.prev_page.addEventListener('click', () => { state.page -= 1; render(); }); el.next_page.addEventListener('click', () => { state.page += 1; render(); });
 el.columns_button.addEventListener('click', () => { el.columns_panel.hidden = !el.columns_panel.hidden; el.columns_button.setAttribute('aria-expanded', String(!el.columns_panel.hidden)); });
 el.all_columns.addEventListener('click', () => { state.visible = new Set(state.headers.map((_, i) => i)); buildColumnPanel(); render(); });
+el.filter_button.addEventListener('click', () => { el.filter_panel.hidden = !el.filter_panel.hidden; el.filter_button.setAttribute('aria-expanded', String(!el.filter_panel.hidden)); });
+el.filter_column.addEventListener('change', updateFilterOperators); el.filter_operator.addEventListener('change', updateFilterValueFields); el.add_filter.addEventListener('click', addFilter);
+el.filter_value.addEventListener('keydown', (event) => { if (event.key === 'Enter' && el.filter_value2_wrap.hidden) addFilter(); }); el.filter_value2.addEventListener('keydown', (event) => { if (event.key === 'Enter') addFilter(); });
+el.clear_filters.addEventListener('click', () => { state.filters = []; state.page = 1; renderFilterChips(); applyView(); });
 el.close_button.addEventListener('click', closeFile); el.export_button.addEventListener('click', exportResults); el.theme_button.addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
-document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !el.workspace.hidden) { event.preventDefault(); el.search_input.focus(); } if (event.key === 'Escape') el.columns_panel.hidden = true; });
+document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !el.workspace.hidden) { event.preventDefault(); el.search_input.focus(); } if (event.key === 'Escape') { el.columns_panel.hidden = true; el.filter_panel.hidden = true; } });
 document.addEventListener('click', (event) => { if (!el.columns_panel.hidden && !el.columns_panel.contains(event.target) && event.target !== el.columns_button) el.columns_panel.hidden = true; });
 setTheme(localStorage.getItem('utils-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));

@@ -51,11 +51,27 @@
         <label class="search-box"><span aria-hidden="true">⌕</span><input id="search-input" type="search" placeholder="모든 열에서 검색…" autocomplete="off"><kbd>⌘ K</kbd></label>
         <div class="toolbar-actions">
           <label class="select-label">구분자<select id="delimiter-select"><option value="auto">자동</option><option value=",">쉼표</option><option value="tab">탭</option><option value=";">세미콜론</option><option value="|">파이프</option></select></label>
+          <button id="filter-button" class="button secondary" type="button" aria-expanded="false">필터 <span id="filter-count" class="button-count" hidden>0</span></button>
           <button id="columns-button" class="button secondary" type="button" aria-expanded="false">열 표시</button>
           <label class="select-label">페이지<select id="page-size"><option>25</option><option selected>50</option><option>100</option><option>250</option></select></label>
         </div>
         <div id="columns-panel" class="columns-panel" hidden><div class="panel-head"><strong>표시할 열</strong><button id="all-columns" type="button">모두 선택</button></div><div id="columns-list"></div></div>
       </div>
+
+      <section id="filter-panel" class="filter-panel" hidden aria-label="상세 필터">
+        <div class="filter-panel-head">
+          <div><p class="eyebrow">ADVANCED FILTER</p><strong>조건 필터</strong><span>모든 조건을 만족하는 행만 표시합니다.</span></div>
+          <button id="clear-filters" type="button">전체 초기화</button>
+        </div>
+        <div class="filter-builder">
+          <label>열<select id="filter-column"></select></label>
+          <label>조건<select id="filter-operator"></select></label>
+          <label id="filter-value-wrap">값<input id="filter-value" type="text" autocomplete="off" placeholder="필터 값"></label>
+          <label id="filter-value2-wrap" hidden>최댓값<input id="filter-value2" type="text" autocomplete="off" placeholder="최댓값"></label>
+          <button id="add-filter" class="button primary" type="button">조건 추가</button>
+        </div>
+        <div id="filter-chips" class="filter-chips" aria-live="polite"></div>
+      </section>
 
       <div id="table-card" class="table-card">
         <div class="table-scroll"><table><thead id="table-head"></thead><tbody id="table-body"></tbody></table></div>

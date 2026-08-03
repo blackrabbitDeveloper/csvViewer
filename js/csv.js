@@ -74,3 +74,68 @@ export function compareCells(a, b) {
   if (left && right && Number.isFinite(ln) && Number.isFinite(rn)) return ln - rn;
   return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
 }
+
+function numericValue(value) {
+  const normalized = String(value).trim().replaceAll(',', '');
+  if (!normalized) return null;
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
+}
+
+function dateValue(value) {
+  const normalized = String(value).trim();
+  if (!/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(normalized)) return null;
+  const time = Date.parse(normalized.replaceAll('.', '-').replaceAll('/', '-'));
+  return Number.isNaN(time) ? null : time;
+}
+
+export function inferColumnType(rows, columnIndex) {
+  const values = rows.map((row) => row[columnIndex]).filter((value) => String(value ?? '').trim()).slice(0, 200);
+  if (!values.length) return 'text';
+  if (values.filter((value) => numericValue(value) !== null).length / values.length >= 0.9) return 'number';
+  if (values.filter((value) => dateValue(value) !== null).length / values.length >= 0.9) return 'date';
+  return 'text';
+}
+
+export function matchesFilter(row, filter) {
+  const raw = String(row[filter.column] ?? '');
+  const left = raw.trim();
+  const right = String(filter.value ?? '').trim();
+  const second = String(filter.value2 ?? '').trim();
+  if (filter.operator === 'empty') return left === '';
+  if (filter.operator === 'not_empty') return left !== '';
+
+  if (filter.type === 'number') {
+    const current = numericValue(left); const target = numericValue(right); const end = numericValue(second);
+    if (current === null || target === null) return false;
+    if (filter.operator === 'eq') return current === target;
+    if (filter.operator === 'neq') return current !== target;
+    if (filter.operator === 'gt') return current > target;
+    if (filter.operator === 'gte') return current >= target;
+    if (filter.operator === 'lt') return current < target;
+    if (filter.operator === 'lte') return current <= target;
+    if (filter.operator === 'between') return end !== null && current >= Math.min(target, end) && current <= Math.max(target, end);
+  }
+  if (filter.type === 'date') {
+    const current = dateValue(left); const target = dateValue(right); const end = dateValue(second);
+    if (current === null || target === null) return false;
+    if (filter.operator === 'on') return current === target;
+    if (filter.operator === 'before') return current < target;
+    if (filter.operator === 'after') return current > target;
+    if (filter.operator === 'between') return end !== null && current >= Math.min(target, end) && current <= Math.max(target, end);
+  }
+
+  const haystack = left.toLocaleLowerCase(); const needle = right.toLocaleLowerCase();
+  if (filter.operator === 'contains') return haystack.includes(needle);
+  if (filter.operator === 'not_contains') return !haystack.includes(needle);
+  if (filter.operator === 'eq') return haystack === needle;
+  if (filter.operator === 'neq') return haystack !== needle;
+  if (filter.operator === 'starts') return haystack.startsWith(needle);
+  if (filter.operator === 'ends') return haystack.endsWith(needle);
+  return true;
+}
+
+export function filterRows(rows, filters) {
+  if (!filters.length) return rows;
+  return rows.filter((row) => filters.every((filter) => matchesFilter(row, filter)));
+}
