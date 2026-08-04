@@ -2,11 +2,11 @@ import { compareCells, detectDelimiter, encodeCSV, filterRows, inferColumnType, 
 
 const $ = (selector) => document.querySelector(selector);
 const el = Object.fromEntries([
-  'welcome', 'workspace', 'dropzone', 'file-input', 'open-button', 'export-button', 'theme-button', 'sample-button', 'filename', 'file-meta', 'row-count', 'column-count', 'delimiter-label', 'visible-count', 'search-input', 'delimiter-select', 'columns-button', 'columns-panel', 'columns-list', 'all-columns', 'page-size', 'table-head', 'table-body', 'empty-state', 'range-label', 'page-label', 'prev-page', 'next-page', 'close-button', 'toast', 'filter-button', 'filter-count', 'filter-panel', 'filter-column', 'filter-operator', 'filter-value-wrap', 'filter-value', 'filter-value2-wrap', 'filter-value2', 'add-filter', 'clear-filters', 'filter-chips',
+  'welcome', 'workspace', 'dropzone', 'file-input', 'open-button', 'export-button', 'theme-button', 'sample-button', 'filename', 'file-meta', 'row-count', 'column-count', 'delimiter-label', 'visible-count', 'search-input', 'delimiter-select', 'columns-button', 'columns-panel', 'columns-list', 'all-columns', 'wrap-button', 'page-size', 'table-head', 'table-body', 'empty-state', 'range-label', 'page-label', 'prev-page', 'next-page', 'close-button', 'toast', 'filter-button', 'filter-count', 'filter-panel', 'filter-column', 'filter-operator', 'filter-value-wrap', 'filter-value', 'filter-value2-wrap', 'filter-value2', 'add-filter', 'clear-filters', 'filter-chips', 'cell-dialog', 'cell-dialog-title', 'cell-dialog-meta', 'cell-dialog-content', 'cell-dialog-length', 'cell-dialog-close', 'cell-copy-button',
 ].map((id) => [id.replaceAll('-', '_'), $(`#${id}`)]));
 
-const state = { rawText: '', filename: '', delimiter: ',', headers: [], rows: [], filtered: [], visible: new Set(), columnTypes: [], filters: [], query: '', sort: null, direction: 1, page: 1, pageSize: 50 };
-let toastTimer;
+const state = { rawText: '', filename: '', delimiter: ',', headers: [], rows: [], filtered: [], visible: new Set(), columnTypes: [], filters: [], query: '', sort: null, direction: 1, page: 1, pageSize: 50, wrapCells: localStorage.getItem('csv-wrap-cells') === 'true' };
+let toastTimer; let currentCellValue = '';
 const delimiterNames = { ',': 'Comma', '\t': 'Tab', ';': 'Semicolon', '|': 'Pipe' };
 const operators = {
   text: [['contains', '포함'], ['not_contains', '포함하지 않음'], ['eq', '같음'], ['neq', '같지 않음'], ['starts', '시작 문자'], ['ends', '끝 문자'], ['empty', '비어 있음'], ['not_empty', '비어 있지 않음']],
@@ -26,6 +26,25 @@ BR-1054,2026-08-03,윤지호,대구,Webcam Pro,Cameras,1,129000,결제 완료`;
 function showToast(message) {
   el.toast.textContent = message; el.toast.classList.add('visible'); clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.toast.classList.remove('visible'), 2200);
+}
+
+function setWrapCells(enabled) {
+  state.wrapCells = enabled; localStorage.setItem('csv-wrap-cells', String(enabled));
+  document.querySelector('#table-card table').classList.toggle('wrap-cells', enabled);
+  el.wrap_button.setAttribute('aria-pressed', String(enabled)); el.wrap_button.textContent = enabled ? '한 줄 보기' : '줄바꿈 보기';
+}
+
+function openCellDetail(value, columnIndex, rowIndex) {
+  currentCellValue = value;
+  el.cell_dialog_title.textContent = state.headers[columnIndex] || '셀 내용';
+  el.cell_dialog_meta.textContent = `${rowIndex.toLocaleString()}행 · ${state.headers[columnIndex] || `${columnIndex + 1}열`}`;
+  el.cell_dialog_content.textContent = value || '(빈 셀)'; el.cell_dialog_length.textContent = `${value.length.toLocaleString()}자`;
+  el.cell_dialog.showModal();
+}
+
+async function copyCellContent() {
+  try { await navigator.clipboard.writeText(currentCellValue); showToast('셀 내용을 복사했습니다.'); }
+  catch { showToast('복사하지 못했습니다. 내용을 직접 선택해 주세요.'); el.cell_dialog_content.focus(); }
 }
 
 function decodeFile(buffer) {
@@ -138,7 +157,12 @@ function render() {
   const start = (state.page - 1) * state.pageSize; const pageRows = state.filtered.slice(start, start + state.pageSize);
   el.table_body.replaceChildren(...pageRows.map(({ row, originalIndex }) => {
     const tr = document.createElement('tr'); const number = document.createElement('td'); number.className = 'row-number'; number.textContent = originalIndex + 1; tr.append(number);
-    visibleIndexes.forEach((index) => { const td = document.createElement('td'); td.textContent = row[index]; td.title = row[index]; tr.append(td); }); return tr;
+    visibleIndexes.forEach((index) => {
+      const td = document.createElement('td'); td.textContent = row[index]; td.tabIndex = 0; td.setAttribute('role', 'button'); td.setAttribute('aria-label', `${state.headers[index]} 셀 상세 보기`);
+      td.addEventListener('click', () => openCellDetail(row[index], index, originalIndex + 1));
+      td.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openCellDetail(row[index], index, originalIndex + 1); } });
+      tr.append(td);
+    }); return tr;
   }));
   const total = state.filtered.length; const end = Math.min(start + state.pageSize, total); const pages = Math.max(1, Math.ceil(total / state.pageSize));
   el.row_count.textContent = state.rows.length.toLocaleString(); el.column_count.textContent = state.headers.length.toLocaleString();
@@ -168,11 +192,15 @@ el.page_size.addEventListener('change', () => { state.pageSize = Number(el.page_
 el.prev_page.addEventListener('click', () => { state.page -= 1; render(); }); el.next_page.addEventListener('click', () => { state.page += 1; render(); });
 el.columns_button.addEventListener('click', () => { el.columns_panel.hidden = !el.columns_panel.hidden; el.columns_button.setAttribute('aria-expanded', String(!el.columns_panel.hidden)); });
 el.all_columns.addEventListener('click', () => { state.visible = new Set(state.headers.map((_, i) => i)); buildColumnPanel(); render(); });
+el.wrap_button.addEventListener('click', () => setWrapCells(!state.wrapCells));
 el.filter_button.addEventListener('click', () => { el.filter_panel.hidden = !el.filter_panel.hidden; el.filter_button.setAttribute('aria-expanded', String(!el.filter_panel.hidden)); });
 el.filter_column.addEventListener('change', updateFilterOperators); el.filter_operator.addEventListener('change', updateFilterValueFields); el.add_filter.addEventListener('click', addFilter);
 el.filter_value.addEventListener('keydown', (event) => { if (event.key === 'Enter' && el.filter_value2_wrap.hidden) addFilter(); }); el.filter_value2.addEventListener('keydown', (event) => { if (event.key === 'Enter') addFilter(); });
 el.clear_filters.addEventListener('click', () => { state.filters = []; state.page = 1; renderFilterChips(); applyView(); });
 el.close_button.addEventListener('click', closeFile); el.export_button.addEventListener('click', exportResults); el.theme_button.addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+el.cell_dialog_close.addEventListener('click', () => el.cell_dialog.close()); el.cell_copy_button.addEventListener('click', copyCellContent);
+el.cell_dialog.addEventListener('click', (event) => { if (event.target === el.cell_dialog) el.cell_dialog.close(); });
 document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !el.workspace.hidden) { event.preventDefault(); el.search_input.focus(); } if (event.key === 'Escape') { el.columns_panel.hidden = true; el.filter_panel.hidden = true; } });
 document.addEventListener('click', (event) => { if (!el.columns_panel.hidden && !el.columns_panel.contains(event.target) && event.target !== el.columns_button) el.columns_panel.hidden = true; });
 setTheme(localStorage.getItem('utils-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+setWrapCells(state.wrapCells);
